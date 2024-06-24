@@ -26,4 +26,13 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const registry_generator = b.addExecutable(.{
+        .name = "generate_registry",
+        .root_source_file = b.path("tools/mason_registry.zig"),
+        .target = b.host,
+    });
+    const registry_step = b.step("gen_registry", "Generate mason.nvim registry");
+    const registry_generation = b.addRunArtifact(registry_generator);
+    registry_step.dependOn(&registry_generation.step);
 }
