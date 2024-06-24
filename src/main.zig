@@ -16,7 +16,7 @@ pub fn main() !u8 {
             .version = "0.1.0",
         },
     };
-    var server = Lsp.init(allocator, server_data, {});
+    var server = Lsp.init(allocator, server_data);
     defer server.deinit();
 
     server.registerDocOpenCallback(handleOpen);
@@ -26,10 +26,10 @@ pub fn main() !u8 {
     return server.start();
 }
 
-fn handleHover(allocator: std.mem.Allocator, context: Lsp.Context, request: lsp.types.Request.Hover.Params, id: i32) void {
-    const line = context.document.getLine(request.position).?;
+fn handleHover(allocator: std.mem.Allocator, context: *Lsp.Context, id: i32, position: lsp.types.Position) void {
+    const line = context.document.getLine(position).?;
     if (std.mem.startsWith(u8, line, "test")) {
-        const filename = uriToFilename(request.textDocument.uri);
+        const filename = uriToFilename(context.document.uri);
         const name_start = std.mem.indexOfScalar(u8, line, '"').?;
         const name_end = name_start + std.mem.indexOfScalarPos(u8, line, name_start, '"').?;
         const test_name = line[name_start + 1 .. name_end];
@@ -50,12 +50,12 @@ fn handleHover(allocator: std.mem.Allocator, context: Lsp.Context, request: lsp.
     }
 }
 
-fn handleOpen(allocator: std.mem.Allocator, context: Lsp.Context, notification: lsp.types.Notification.DidOpenTextDocument.Params) void {
-    sendNotification(allocator, notification.textDocument.uri, context.document);
+fn handleOpen(allocator: std.mem.Allocator, context: *Lsp.Context) void {
+    sendNotification(allocator, context.document);
 }
 
-fn handleSave(allocator: std.mem.Allocator, context: Lsp.Context, notification: lsp.types.Notification.DidSaveTextDocument.Params) void {
-    sendNotification(allocator, notification.textDocument.uri, context.document);
+fn handleSave(allocator: std.mem.Allocator, context: *Lsp.Context) void {
+    sendNotification(allocator, context.document);
 }
 
 fn uriToFilename(uri: []const u8) []const u8 {
@@ -114,7 +114,7 @@ fn createDiagnostic(line: usize, pass: bool) lsp.types.Diagnostic {
     };
 }
 
-fn sendNotification(allocator: std.mem.Allocator, uri: []const u8, document: lsp.Document) void {
+fn sendNotification(allocator: std.mem.Allocator, document: lsp.Document) void {
     var test_lines = std.ArrayList(usize).init(allocator);
     defer test_lines.deinit();
     var lines = std.mem.splitScalar(u8, document.text, '\n');
@@ -126,7 +126,7 @@ fn sendNotification(allocator: std.mem.Allocator, uri: []const u8, document: lsp
         }
     }
 
-    const filename = uriToFilename(uri);
+    const filename = uriToFilename(document.uri);
     var diagnostics = std.ArrayList(lsp.types.Diagnostic).init(allocator);
     defer diagnostics.deinit();
     for (test_lines.items) |test_line| {
@@ -141,7 +141,7 @@ fn sendNotification(allocator: std.mem.Allocator, uri: []const u8, document: lsp
     }
 
     const response = lsp.types.Notification.PublishDiagnostics{ .method = "textDocument/publishDiagnostics", .params = .{
-        .uri = uri,
+        .uri = document.uri,
         .diagnostics = diagnostics.items,
     } };
 
