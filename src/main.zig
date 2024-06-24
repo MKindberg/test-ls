@@ -1,7 +1,8 @@
 const std = @import("std");
 const lsp = @import("lsp");
 
-const Lsp = lsp.Lsp(void);
+const State = @import("analysis.zig").State;
+const Lsp = lsp.Lsp(State);
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -27,22 +28,14 @@ pub fn main() !u8 {
 }
 
 fn handleHover(allocator: std.mem.Allocator, context: *Lsp.Context, id: i32, position: lsp.types.Position) void {
-    const line = context.document.getLine(position).?;
-    if (std.mem.startsWith(u8, line, "test")) {
-        const filename = uriToFilename(context.document.uri);
-        const name_start = std.mem.indexOfScalar(u8, line, '"').?;
-        const name_end = name_start + std.mem.indexOfScalarPos(u8, line, name_start, '"').?;
-        const test_name = line[name_start + 1 .. name_end];
-        const test_data = runTest(allocator, filename, test_name) catch return;
-        defer allocator.free(test_data.stdout);
-        defer allocator.free(test_data.stderr);
-
+    const line = position.line;
+    if (context.state.?.test_results.get(line)) |test_result| {
         var message = std.ArrayList(u8).init(allocator);
         defer message.deinit();
 
-        message.writer().print("Result: {any}\n\n", .{test_data.term.Exited}) catch unreachable;
-        if (test_data.stdout.len > 0) message.writer().print("stdout:\n{s}\n\n", .{test_data.stdout}) catch unreachable;
-        if (test_data.stderr.len > 0) message.writer().print("stderr:\n{s}\n\n", .{test_data.stderr}) catch unreachable;
+        message.writer().print("Result: {any}\n\n", .{test_result.term.Exited}) catch unreachable;
+        if (test_result.stdout.len > 0) message.writer().print("stdout:\n{s}\n\n", .{test_result.stdout}) catch unreachable;
+        if (test_result.stderr.len > 0) message.writer().print("stderr:\n{s}\n\n", .{test_result.stderr}) catch unreachable;
 
         const response = lsp.types.Response.Hover.init(id, message.items);
 
@@ -51,32 +44,37 @@ fn handleHover(allocator: std.mem.Allocator, context: *Lsp.Context, id: i32, pos
 }
 
 fn handleOpen(allocator: std.mem.Allocator, context: *Lsp.Context) void {
-    sendNotification(allocator, context.document);
+    context.state = State.init(allocator);
+    context.state.?.update(allocator, context.document) catch unreachable;
+    sendDiagnostics(allocator, context.document.uri, context.state.?);
 }
 
 fn handleSave(allocator: std.mem.Allocator, context: *Lsp.Context) void {
-    sendNotification(allocator, context.document);
+    context.state.?.update(allocator, context.document) catch unreachable;
+    sendDiagnostics(allocator, context.document.uri, context.state.?);
 }
 
-fn uriToFilename(uri: []const u8) []const u8 {
-    return uri[7..];
+fn handleClose(allocator: std.mem.Allocator, context: *Lsp.Context) void {
+    context.state.?.deinit(allocator);
 }
 
-fn testName(line: []const u8) []const u8 {
-    const name_start = std.mem.indexOfScalar(u8, line, '"').?;
-    const name_end = name_start + std.mem.indexOfScalarPos(u8, line, name_start, '"').?;
-    return line[name_start + 1 .. name_end];
-}
+fn sendDiagnostics(allocator: std.mem.Allocator, uri: []const u8, state: State) void {
+    var it = state.test_results.iterator();
+    var diagnostics = std.ArrayList(lsp.types.Diagnostic).init(allocator);
+    defer diagnostics.deinit();
+    while (it.next()) |result_obj| {
+        const line = result_obj.key_ptr.*;
+        const test_result = result_obj.value_ptr;
+        const diagnostic = createDiagnostic(line, test_result.term.Exited == 0);
+        diagnostics.append(diagnostic) catch unreachable;
+    }
 
-fn runTest(allocator: std.mem.Allocator, file: []const u8, name: []const u8) !std.process.Child.RunResult {
-    const argv = [_][]const u8{
-        "zig",
-        "test",
-        file,
-        "--test-filter",
-        name,
-    };
-    return std.process.Child.run(.{ .allocator = allocator, .argv = &argv });
+    const response = lsp.types.Notification.PublishDiagnostics{ .method = "textDocument/publishDiagnostics", .params = .{
+        .uri = uri,
+        .diagnostics = diagnostics.items,
+    } };
+
+    lsp.writeResponse(allocator, response) catch unreachable;
 }
 
 fn createDiagnostic(line: usize, pass: bool) lsp.types.Diagnostic {
@@ -112,38 +110,4 @@ fn createDiagnostic(line: usize, pass: bool) lsp.types.Diagnostic {
         .source = "test-ls",
         .message = "Test failed",
     };
-}
-
-fn sendNotification(allocator: std.mem.Allocator, document: lsp.Document) void {
-    var test_lines = std.ArrayList(usize).init(allocator);
-    defer test_lines.deinit();
-    var lines = std.mem.splitScalar(u8, document.text, '\n');
-
-    var i: usize = 0;
-    while (lines.next()) |line| : (i += 1) {
-        if (std.mem.startsWith(u8, line, "test")) {
-            test_lines.append(i) catch unreachable;
-        }
-    }
-
-    const filename = uriToFilename(document.uri);
-    var diagnostics = std.ArrayList(lsp.types.Diagnostic).init(allocator);
-    defer diagnostics.deinit();
-    for (test_lines.items) |test_line| {
-        const line = document.getLine(lsp.types.Position{ .line = test_line, .character = 0 }).?;
-        const test_name = testName(line);
-
-        const test_result = runTest(allocator, filename, test_name) catch continue;
-        allocator.free(test_result.stdout);
-        allocator.free(test_result.stderr);
-        const diagnostic = createDiagnostic(test_line, test_result.term.Exited == 0);
-        diagnostics.append(diagnostic) catch unreachable;
-    }
-
-    const response = lsp.types.Notification.PublishDiagnostics{ .method = "textDocument/publishDiagnostics", .params = .{
-        .uri = document.uri,
-        .diagnostics = diagnostics.items,
-    } };
-
-    lsp.writeResponse(allocator, response) catch unreachable;
 }
