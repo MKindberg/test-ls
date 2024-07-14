@@ -1,15 +1,22 @@
 const std = @import("std");
 const lsp = @import("lsp");
+const zig = @import("zig.zig");
+
+pub const Result = struct {
+    name: []const u8,
+    output: []const u8 = "",
+    status: bool,
+};
 
 pub const State = struct {
-    const RunResult = std.process.Child.RunResult;
     const Self = @This();
 
-    test_results: std.AutoArrayHashMap(usize, RunResult),
+    test_results: std.AutoArrayHashMap(usize, Result),
+    arena: ?std.heap.ArenaAllocator = null,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .test_results = std.AutoArrayHashMap(usize, RunResult).init(allocator),
+            .test_results = std.AutoArrayHashMap(usize, Result).init(allocator),
         };
     }
 
@@ -18,25 +25,32 @@ pub const State = struct {
         self.test_results.deinit();
     }
 
-    fn clear(self: *Self, allocator: std.mem.Allocator) void {
-        var entries = self.test_results.iterator();
-        while (entries.next()) |entry| {
-            allocator.free(entry.value_ptr.stdout);
-            allocator.free(entry.value_ptr.stderr);
-        }
+    fn clear(self: *Self) void {
         self.test_results.clearAndFree();
+        if (self.arena) |a| {
+            a.deinit();
+            self.arena = null;
+        }
     }
 
     pub fn update(self: *Self, allocator: std.mem.Allocator, doc: lsp.Document) !void {
-        self.clear(allocator);
+        self.clear();
         var lines = std.mem.splitScalar(u8, doc.text, '\n');
+        const filename = uriToFilename(doc.uri);
+
+        self.arena = std.heap.ArenaAllocator.init(allocator);
+        const results = try zig.Zig.run(self.arena.?.allocator(), filename);
 
         var i: usize = 0;
         while (lines.next()) |line| : (i += 1) {
-            if (!std.mem.startsWith(u8, line, "test ")) continue;
+            if (!std.mem.startsWith(u8, line, "test \"")) continue;
             const test_name = getTestName(line);
-            const filename = uriToFilename(doc.uri);
-            try self.test_results.put(i, try runTest(allocator, filename, test_name));
+            for (results) |r| {
+                if (std.mem.eql(u8, r.name, test_name)) {
+                    try self.test_results.put(i, r);
+                    break;
+                }
+            }
         }
     }
 };

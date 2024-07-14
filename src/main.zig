@@ -32,9 +32,8 @@ fn handleHover(arena: std.mem.Allocator, context: *Lsp.Context, position: lsp.ty
     if (context.state.?.test_results.get(line)) |test_result| {
         var message = std.ArrayList(u8).init(arena);
 
-        message.writer().print("Result: {any}\n\n", .{test_result.term.Exited}) catch unreachable;
-        if (test_result.stdout.len > 0) message.writer().print("stdout:\n{s}\n\n", .{test_result.stdout}) catch unreachable;
-        if (test_result.stderr.len > 0) message.writer().print("stderr:\n{s}\n\n", .{test_result.stderr}) catch unreachable;
+        message.writer().print("Result: {any}\n\n", .{test_result.status}) catch unreachable;
+        if (test_result.output.len > 0) message.writer().print("output:\n{s}\n\n", .{test_result.output}) catch unreachable;
 
         return message.items;
     }
@@ -63,7 +62,7 @@ fn sendDiagnostics(arena: std.mem.Allocator, uri: []const u8, state: State) void
     while (it.next()) |result_obj| {
         const line = result_obj.key_ptr.*;
         const test_result = result_obj.value_ptr;
-        const diagnostic = createDiagnostic(line, test_result.term.Exited == 0);
+        const diagnostic = createDiagnostic(line, test_result.status);
         diagnostics.append(diagnostic) catch unreachable;
     }
 
