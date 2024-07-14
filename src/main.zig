@@ -1,17 +1,17 @@
 const std = @import("std");
 const lsp = @import("lsp");
+const builtin = @import("builtin");
 
 const State = @import("analysis.zig").State;
 const Lsp = lsp.Lsp(State);
+
+pub const std_options = .{ .log_level = if (builtin.mode == .Debug) .debug else .info, .logFn = lsp.log };
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
 pub fn main() !u8 {
     const server_data = lsp.types.ServerData{
-        .capabilities = .{
-            .hoverProvider = true,
-        },
         .serverInfo = .{
             .name = "test-ls",
             .version = "0.1.1",
