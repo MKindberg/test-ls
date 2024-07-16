@@ -55,12 +55,6 @@ pub const State = struct {
     }
 };
 
-const TestResult = struct {
-    const RunResult = std.process.Child.RunResult;
-
-    result: RunResult,
-};
-
 fn getTestName(line: []const u8) []const u8 {
     const name_start = std.mem.indexOfScalar(u8, line, '"').?;
     const name_end = std.mem.indexOfScalarPos(u8, line, name_start + 1, '"').?;

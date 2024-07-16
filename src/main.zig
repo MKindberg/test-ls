@@ -32,7 +32,7 @@ fn handleHover(arena: std.mem.Allocator, context: *Lsp.Context, position: lsp.ty
     if (context.state.?.test_results.get(line)) |test_result| {
         var message = std.ArrayList(u8).init(arena);
 
-        message.writer().print("Result: {any}\n\n", .{test_result.status}) catch unreachable;
+        message.writer().print("Result: {any}\n\n", .{if (test_result.status) "Passed" else "Failed"}) catch unreachable;
         if (test_result.output.len > 0) message.writer().print("output:\n{s}\n\n", .{test_result.output}) catch unreachable;
 
         return message.items;
