@@ -8,6 +8,7 @@ const Lsp = lsp.Lsp(State);
 pub const std_options = .{ .log_level = if (builtin.mode == .Debug) .debug else .info, .logFn = lsp.log };
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var server: Lsp = undefined;
 const allocator = gpa.allocator();
 
 pub fn main() !u8 {
@@ -17,20 +18,21 @@ pub fn main() !u8 {
             .version = "0.1.1",
         },
     };
-    var server = Lsp.init(allocator, server_data);
+    server = Lsp.init(allocator, server_data);
     defer server.deinit();
 
     server.registerDocOpenCallback(handleOpen);
     server.registerDocSaveCallback(handleSave);
     server.registerHoverCallback(handleHover);
+    server.registerDocCloseCallback(handleClose);
 
     return server.start();
 }
 
-fn handleHover(arena: std.mem.Allocator, context: *Lsp.Context, position: lsp.types.Position) ?[]const u8 {
-    const line = position.line;
-    if (context.state.?.test_results.get(line)) |test_result| {
-        var message = std.ArrayList(u8).init(arena);
+fn handleHover(p: Lsp.HoverParameters) ?[]const u8 {
+    const line = p.position.line;
+    if (p.context.state.?.test_results.get(line)) |test_result| {
+        var message = std.ArrayList(u8).init(p.arena);
 
         message.writer().print("Result: {any}\n\n", .{if (test_result.status) "Passed" else "Failed"}) catch unreachable;
         if (test_result.output.len > 0) message.writer().print("output:\n{s}\n\n", .{test_result.output}) catch unreachable;
@@ -40,19 +42,19 @@ fn handleHover(arena: std.mem.Allocator, context: *Lsp.Context, position: lsp.ty
     return null;
 }
 
-fn handleOpen(arena: std.mem.Allocator, context: *Lsp.Context) void {
-    context.state = State.init(allocator);
-    context.state.?.update(allocator, context.document) catch unreachable;
-    sendDiagnostics(arena, context.document.uri, context.state.?);
+fn handleOpen(p: Lsp.OpenDocumentParameters) void {
+    p.context.state = State.init(allocator);
+    p.context.state.?.update(allocator, p.context.document) catch unreachable;
+    sendDiagnostics(p.arena, p.context.document.uri, p.context.state.?);
 }
 
-fn handleSave(arena: std.mem.Allocator, context: *Lsp.Context) void {
-    context.state.?.update(allocator, context.document) catch unreachable;
-    sendDiagnostics(arena, context.document.uri, context.state.?);
+fn handleSave(p: Lsp.SaveDocumentParameters) void {
+    p.context.state.?.update(allocator, p.context.document) catch unreachable;
+    sendDiagnostics(p.arena, p.context.document.uri, p.context.state.?);
 }
 
-fn handleClose(_: std.mem.Allocator, context: *Lsp.Context) void {
-    context.state.?.deinit(allocator);
+fn handleClose(p: Lsp.CloseDocumentParameters) void {
+    p.context.state.?.deinit(allocator);
 }
 
 fn sendDiagnostics(arena: std.mem.Allocator, uri: []const u8, state: State) void {
@@ -71,7 +73,7 @@ fn sendDiagnostics(arena: std.mem.Allocator, uri: []const u8, state: State) void
         .diagnostics = diagnostics.items,
     } };
 
-    lsp.writeResponse(arena, response) catch unreachable;
+    server.writeResponse(arena, response) catch unreachable;
 }
 
 fn createDiagnostic(line: usize, pass: bool) lsp.types.Diagnostic {

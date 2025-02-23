@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const lsp_server = b.dependency("lsp-server", .{
+    const lsp_server = b.dependency("babel", .{
         .target = target,
         .optimize = optimize,
     });
